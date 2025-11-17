@@ -28,9 +28,17 @@ public class CrawledPageResponse {
     private Integer outgoingLinksCount;
     private Long parentPageId;
 
-    //Convert from entity to DTO
-    public static CrawledPageResponse fromEntity(CrawledPage page){
+    // ============================================
+    // AI Klassificering felter
+    // ============================================
 
+    private String category;      // AI klassificeret kategori
+    private Boolean aiAnalyzed;   // Om siden er blevet analyseret
+
+    /**
+     * Konverter fra entity til DTO
+     */
+    public static CrawledPageResponse fromEntity(CrawledPage page){
         return CrawledPageResponse.builder()
                 .id(page.getId())
                 .url(page.getUrl())
@@ -44,8 +52,8 @@ public class CrawledPageResponse {
                 .createdAt(page.getCrawledAt())
                 .outgoingLinksCount(page.getOutgoingLinksCount())
                 .parentPageId(page.getParentPage() != null ? page.getParentPage().getId() : null)
+                .category(page.getCategory())           // NYTILFØJET
+                .aiAnalyzed(page.getAiAnalyzed())       // NYTILFØJET
                 .build();
-
     }
-
 }

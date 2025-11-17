@@ -6,10 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.ek.webcrawler.model.CrawlJob;
 import org.ek.webcrawler.model.CrawledPage;
 import org.ek.webcrawler.model.PageLink;
-import org.ek.webcrawler.repository.CrawlJobRepository;
 import org.ek.webcrawler.repository.CrawledPageRepository;
 import org.ek.webcrawler.repository.PageLinkRepository;
-import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -25,15 +23,29 @@ public class PageService {
     private final PageLinkRepository pageLinkRepository;
 
     /**
-     * Save a crawled page.
+     * Gem en crawlet side (UDEN tekstindhold - backwards compatible)
      */
     @Transactional
     public CrawledPage savePage(CrawlJob job, String url, String title,
                                 Integer hierarchyLevel, CrawledPage parentPage,
                                 Integer statusCode, String contentType,
-                                Boolean isSuccesfull) {
+                                Boolean isSuccessful) {
+        return savePage(job, url, title, hierarchyLevel, parentPage, statusCode, contentType, isSuccessful, null);
+    }
 
-        log.debug("Saving page: {} (level: {}) ", url, hierarchyLevel);
+    /**
+     * Gem en crawlet side MED tekstindhold (til AI klassificering)
+     *
+     * @param textContent Tekstindhold fra siden (første 5000 chars)
+     */
+    @Transactional
+    public CrawledPage savePage(CrawlJob job, String url, String title,
+                                Integer hierarchyLevel, CrawledPage parentPage,
+                                Integer statusCode, String contentType,
+                                Boolean isSuccessful, String textContent) {
+
+        log.debug("Saving page: {} (level: {})", url, hierarchyLevel);
+
         CrawledPage page = CrawledPage.builder()
                 .crawlJob(job)
                 .url(url)
@@ -42,24 +54,25 @@ public class PageService {
                 .parentPage(parentPage)
                 .httpStatusCode(statusCode)
                 .contentType(contentType)
-                .isSuccessful(isSuccesfull)
+                .isSuccessful(isSuccessful)
                 .crawledAt(LocalDateTime.now())
                 .outgoingLinksCount(0)
                 .isApi(false)
                 .isJson(contentType != null && contentType.contains("json"))
+                .textContent(textContent)  // TILFØJET: Gem tekstindhold til AI
                 .build();
 
         return crawledPageRepository.save(page);
     }
 
     /**
-     * Save a failed page
+     * Gem en fejlet side
      */
     @Transactional
     public CrawledPage saveFailedPage(CrawlJob job, String url, Integer hierarchyLevel,
                                       CrawledPage parentPage, String errorMessage) {
 
-        log.warn("Saving failed page: {} - {} ", url, errorMessage);
+        log.warn("Saving failed page: {} - {}", url, errorMessage);
 
         CrawledPage page = CrawledPage.builder()
                 .crawlJob(job)
@@ -72,17 +85,16 @@ public class PageService {
                 .build();
 
         return crawledPageRepository.save(page);
-
     }
 
     /**
-     * Create a link between two pages.
+     * Opret et link mellem to sider
      */
     @Transactional
     public PageLink createLink(CrawledPage sourcePage, CrawledPage targetPage,
-                           String linkText, PageLink.LinkType linkType) {
+                               String linkText, PageLink.LinkType linkType) {
 
-        log.debug("Creating link from {} to {} ", sourcePage.getUrl(), targetPage.getUrl());
+        log.debug("Creating link from {} to {}", sourcePage.getUrl(), targetPage.getUrl());
 
         PageLink link = PageLink.builder()
                 .sourcePage(sourcePage)
@@ -91,63 +103,59 @@ public class PageService {
                 .linkType(linkType)
                 .build();
 
-        //update outgoing links count
+        // Opdater outgoing links count
         sourcePage.setOutgoingLinksCount(sourcePage.getOutgoingLinksCount() + 1);
         crawledPageRepository.save(sourcePage);
 
         return pageLinkRepository.save(link);
-
     }
 
     /**
-     * Check if URL has already been crawled for this job
+     * Check om URL allerede er crawlet for dette job
      */
     public boolean isUrlCrawled(Long jobId, String url) {
         return crawledPageRepository.findByCrawlJobIdAndUrl(jobId, url).isPresent();
     }
 
     /**
-     * Get page by URL
+     * Hent side via URL
      */
     public Optional<CrawledPage> getPageByUrl(Long jobId, String url) {
         return crawledPageRepository.findByCrawlJobIdAndUrl(jobId, url);
     }
 
     /**
-     * get all pages for a job
+     * Hent alle sider for et job
      */
     public List<CrawledPage> getPagesForJob(Long jobId) {
         return crawledPageRepository.findByCrawlJobId(jobId);
     }
 
     /**
-     * Get root page for a job
+     * Hent root sider for et job
      */
     public List<CrawledPage> getRootPages(Long jobId) {
         return crawledPageRepository.findRootPagesByJobId(jobId);
     }
 
     /**
-     * Get pages at specific hierarchy level
+     * Hent sider på specifikt hierarki niveau
      */
     public List<CrawledPage> getPagesByLevel(Long jobId, Integer level) {
         return crawledPageRepository.findByCrawlJobIdAndHierarchyLevel(jobId, level);
     }
 
     /**
-     * Get all links for a page
+     * Hent alle links fra en side
      */
     public List<PageLink> getLinksFromPage(Long pageId) {
         return pageLinkRepository.findBySourcePageId(pageId);
     }
 
     /**
-     * Count total pages for a job
+     * Tæl total sider for et job
      */
     public long countPagesForJob(Long jobId) {
         return crawledPageRepository.countByCrawlJobId(jobId);
     }
-
 }
-
-

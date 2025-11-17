@@ -62,6 +62,13 @@
             <version>1.17.1</version>
         </dependency>
 
+        <!-- Selenium - Selenium -> Henter siden + renderer JavaScript → får HTML -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>4.26.0</version> <!-- Vigtig: 4.6+ -->
+        </dependency>
+
         <!-- JGraphT - Graph data structures and algorithms -->
         <dependency>
             <groupId>org.jgrapht</groupId>
@@ -121,6 +128,14 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>25</source>
+                    <target>25</target>
+                </configuration>
             </plugin>
         </plugins>
     </build>

@@ -61,10 +61,10 @@ public class CrawledPage {
     private String contentType;
 
     @Builder.Default
-    private Boolean isApi = false;  // Changed from boolean to Boolean
+    private Boolean isApi = false;
 
     @Builder.Default
-    private Boolean isJson = false;  // Changed from boolean to Boolean
+    private Boolean isJson = false;
 
     @Column(length = 1000)
     private String errorMessage;
@@ -79,4 +79,34 @@ public class CrawledPage {
     @OneToMany(mappedBy = "targetPage")
     @Builder.Default
     private List<PageLink> incomingLinks = new ArrayList<>();
+
+    // ============================================
+    // AI Klassificering felter
+    // ============================================
+
+    /**
+     * AI klassificeret kategori: PRODUCT, CATEGORY, INFORMATION, BLOG,
+     * CONTACT, JOB, LEGAL, HOME, UNKNOWN
+     */
+    @Column(length = 50)
+    private String category;
+
+    /**
+     * Om siden er blevet analyseret af AI
+     */
+    @Builder.Default
+    private Boolean aiAnalyzed = false;
+
+    /**
+     * Fejlbesked hvis AI klassificering fejler
+     */
+    @Column(length = 500)
+    private String aiAnalysisError;
+
+    /**
+     * Tekstindhold fra siden (til AI klassificering)
+     * Første 5000 karakterer af sidens tekst
+     */
+    @Column(columnDefinition = "TEXT")
+    private String textContent;
 }

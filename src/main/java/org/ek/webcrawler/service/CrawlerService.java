@@ -13,7 +13,9 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Service
@@ -44,7 +46,7 @@ public class CrawlerService {
             Set<String> visitedUrls = new HashSet<>();
             crawlPage(job, job.getStartUrl(), 0, null, visitedUrls);
 
-            // ✅ ALWAYS mark as completed (even if partial)
+            //ALWAYS mark as completed (even if partial)
             crawlJobService.completeJob(jobId);
 
             log.info("Crawling completed for job: {}. Total pages: {}", jobId, visitedUrls.size());
@@ -72,19 +74,23 @@ public class CrawlerService {
             return;
         }
 
-        // Check if already visited
-        if (visitedUrls.contains(url)) {
-            log.debug("URL already visited: {}", url);
+        //  Normalize URL before checking if visited
+        String normalizedUrl = normalizeUrl(url);
+
+        // Check if already visited (using normalized URL)
+        if (visitedUrls.contains(normalizedUrl)) {
+            log.debug("URL already visited (normalized): {}", normalizedUrl);
             return;
         }
 
-        // ✅ ADD: Safety limit - max 100 pages per job
+        // Safety limit - max 100 pages per job
         if (visitedUrls.size() >= 100) {
             log.warn("Safety limit reached: 100 pages crawled for job {}", job.getId());
             return;
         }
 
-        visitedUrls.add(url);
+        // Add normalized URL to visited set
+        visitedUrls.add(normalizedUrl);
 
         log.info("Crawling URL: {} (depth: {}, total visited: {})", url, currentDepth, visitedUrls.size());
 
@@ -93,8 +99,8 @@ public class CrawlerService {
             Document doc = Jsoup.connect(url)
                     .userAgent("Mozilla/5.0 (compatible; WebCrawler/1.0)")
                     .timeout(10000)
-                    .followRedirects(true)  // ✅ ADD: Follow redirects
-                    .ignoreHttpErrors(true)  // ✅ ADD: Don't crash on 404s
+                    .followRedirects(true)
+                    .ignoreHttpErrors(true)
                     .get();
 
             // Save the page
@@ -113,12 +119,35 @@ public class CrawlerService {
                 Elements links = doc.select("a[href]");
                 log.debug("Found {} links on {}", links.size(), url);
 
-                int crawledLinks = 0;
+                // 🔥 FIX: Prioritize navigation links first
+                List<Element> prioritizedLinks = new ArrayList<>();
+                List<Element> otherLinks = new ArrayList<>();
+
                 for (Element link : links) {
+                    String href = link.attr("href");
+                    String text = link.text().toLowerCase();
+
+                    // Navigation links typically in header/nav or have menu-like text
+                    if (link.parents().select("nav, header, [class*=menu], [class*=navigation]").size() > 0
+                            || text.matches(".*(menu|navigation|kategori|sektion|havre|krop|ansigt|baby|sol|ekspert|atopisk|brand).*")) {
+                        prioritizedLinks.add(link);
+                    } else {
+                        otherLinks.add(link);
+                    }
+                }
+
+                // Process navigation links first, then others
+                List<Element> orderedLinks = new ArrayList<>(prioritizedLinks);
+                orderedLinks.addAll(otherLinks);
+
+                log.info("Prioritized {} navigation links out of {}", prioritizedLinks.size(), links.size());
+
+                int crawledLinks = 0;
+                for (Element link : orderedLinks) {
                     String nextUrl = link.absUrl("href");
 
-                    // ✅ ADD: Limit links per page
-                    if (crawledLinks >= 10) {
+                    // 🔥 FIX: Increase limit from 10 to 50
+                    if (crawledLinks >= 50) {
                         log.debug("Link limit reached for page: {}", url);
                         break;
                     }
@@ -153,13 +182,28 @@ public class CrawlerService {
                 return false;
             }
 
+            // 🔥 FIX: Skip common non-content URLs
+            String lowerUrl = url.toLowerCase();
+            if (lowerUrl.contains("/cart") || lowerUrl.contains("/checkout")
+                    || lowerUrl.contains("/login") || lowerUrl.contains("/account")
+                    || lowerUrl.contains(".pdf") || lowerUrl.contains(".jpg")
+                    || lowerUrl.contains(".png") || lowerUrl.contains(".gif")) {
+                log.debug("Skipping non-content URL: {}", url);
+                return false;
+            }
+
             //Check scope
             switch (job.getCrawlScope()) {
                 case SAME_DOMAIN:
-                    //Only same domain (e.g., facebook.com = facebook.com)
-                    String parentDomain = parentUri.getHost();
-                    String targetDomain = uri.getHost();
-                    return targetDomain.equals(parentDomain);
+                    // 🔥 FIX: More flexible domain matching
+                    String parentHost = parentUri.getHost().replaceAll("^www\\.", "");
+                    String targetHost = uri.getHost().replaceAll("^www\\.", "");
+
+                    boolean sameDomain = targetHost.equals(parentHost);
+                    if (!sameDomain) {
+                        log.debug("Different domain: {} vs {}", targetHost, parentHost);
+                    }
+                    return sameDomain;
 
                 case INCLUDE_SUBDOMAINS:
                     //Include subdomains (e.g., m.facebook.com = facebook.com)
@@ -193,6 +237,59 @@ public class CrawlerService {
             return parts[parts.length - 2] + "." + parts[parts.length - 1];
         }
         return host;
+    }
+
+    /**
+     * Normalize URL to prevent duplicate crawling of the same page.
+     * Handles trailing slashes, query parameter ordering, fragments, case sensitivity, etc.
+     */
+    private String normalizeUrl(String url) {
+        try {
+            URI uri = new URI(url);
+
+            // Convert to lowercase
+            String protocol = uri.getScheme().toLowerCase();
+            String host = uri.getHost().toLowerCase();
+
+            // Remove trailing slashes from path (except root "/")
+            String path = uri.getPath();
+            if (path != null && !path.equals("/")) {
+                path = path.replaceAll("/+$", "");
+            }
+            if (path == null || path.isEmpty()) {
+                path = "/";
+            }
+
+            // Sort query parameters alphabetically for consistency
+            String query = uri.getQuery();
+            if (query != null && !query.isEmpty()) {
+                String[] params = query.split("&");
+                java.util.Arrays.sort(params);
+                query = String.join("&", params);
+            }
+
+            // Rebuild URL (ignore fragment/anchor - they don't affect server response)
+            StringBuilder normalized = new StringBuilder();
+            normalized.append(protocol).append("://").append(host);
+
+            // Add port only if non-standard
+            int port = uri.getPort();
+            if (port != -1 && port != 80 && port != 443) {
+                normalized.append(":").append(port);
+            }
+
+            normalized.append(path);
+
+            if (query != null && !query.isEmpty()) {
+                normalized.append("?").append(query);
+            }
+
+            return normalized.toString();
+
+        } catch (Exception e) {
+            log.warn("Failed to normalize URL: {}, using original", url);
+            return url;
+        }
     }
 
 }

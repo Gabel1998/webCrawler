@@ -7,11 +7,14 @@ import org.ek.webcrawler.dto.CreateCrawlJobRequest;
 import org.ek.webcrawler.model.CrawlJob;
 import org.ek.webcrawler.service.CrawlJobService;
 import org.ek.webcrawler.service.CrawlerService;
+import org.ek.webcrawler.service.PageClassificationService;  // NYTILFØJET
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 
 @RestController
@@ -23,19 +26,18 @@ public class CrawlJobController {
 
     private final CrawlJobService crawlJobService;
     private final CrawlerService crawlerService;
+    private final PageClassificationService classificationService;  // NYTILFØJET
 
     /**
-     * Create a new crawl job.
+     * Opret nyt crawl job
      * POST /api/crawl-jobs
      */
     @PostMapping
     public ResponseEntity<CrawlJobResponse> createCrawlJob(@RequestBody CreateCrawlJobRequest request) {
-        log.info("Received request to create crawl job for URL: {}", request.getStartUrl());
+        log.info("Modtaget request til at oprette crawl job for URL: {}", request.getStartUrl());
 
-        //Validate request
         request.validate();
 
-        //Create Job
         CrawlJob job = crawlJobService.createCrawlJob(
                 request.getStartUrl(),
                 request.getMaxDepth(),
@@ -49,51 +51,46 @@ public class CrawlJobController {
     }
 
     /**
-     * Start crawl job.
+     * Start crawl job
      * POST /api/crawl-jobs/{id}/start
      */
     @PostMapping("/{id}/start")
     public ResponseEntity<CrawlJobResponse> startCrawlJob(@PathVariable Long id) {
+        log.info("Starter crawl job: {}", id);
 
-        log.info("Starting a crawl job: {}", id);
-
-        //Get job
         CrawlJob job = crawlJobService.getJob(id)
-                .orElseThrow(() -> new RuntimeException("Crawl job not found for ID: " + id));
+                .orElseThrow(() -> new RuntimeException("Crawl job ikke fundet for ID: " + id));
 
-        //Check if already in progress or completed
         if (job.getStatus() != CrawlJob.CrawlStatus.PENDING) {
-            throw new IllegalStateException("Job Cannot be started. Current status: " + job.getStatus());
+            throw new IllegalStateException("Job kan ikke startes. Nuværende status: " + job.getStatus());
         }
 
-        //Start crawling asynchronously
         crawlerService.startCrawling(id);
 
-        //Return immediatly (Job is now IN_PROGRESS)
         return ResponseEntity.ok(CrawlJobResponse.fromEntity(job));
     }
 
     /**
-     * Get a specific crawl job by ID.
+     * Hent specifikt crawl job
      * GET /api/crawl-jobs/{id}
      */
     @GetMapping("/{id}")
     public ResponseEntity<CrawlJobResponse> getCrawlJob(@PathVariable Long id) {
-        log.info("Fetching crawl job: {}", id);
+        log.info("Henter crawl job: {}", id);
 
         CrawlJob job = crawlJobService.getJob(id)
-                .orElseThrow(() -> new RuntimeException("Crawl job not found for ID: " + id));
+                .orElseThrow(() -> new RuntimeException("Crawl job ikke fundet for ID: " + id));
 
         return ResponseEntity.ok(CrawlJobResponse.fromEntity(job));
     }
 
     /**
-     * Get all crawl jobs.
+     * Hent alle crawl jobs
      * GET /api/crawl-jobs
      */
     @GetMapping
     public ResponseEntity<List<CrawlJobResponse>> getAllCrawlJobs() {
-        log.info("Fetching all crawl jobs");
+        log.info("Henter alle crawl jobs");
 
         List<CrawlJobResponse> jobs = crawlJobService.getAllJobs()
                 .stream()
@@ -104,12 +101,12 @@ public class CrawlJobController {
     }
 
     /**
-     * Get crawl jobs by status.
+     * Hent crawl jobs efter status
      * GET /api/crawl-jobs?status={COMPLETED}
      */
     @GetMapping(params = "status")
     public ResponseEntity<List<CrawlJobResponse>> getCrawlJobsByStatus(@RequestParam CrawlJob.CrawlStatus status) {
-        log.info("Fetching crawl jobs with status: {}", status);
+        log.info("Henter crawl jobs med status: {}", status);
 
         List<CrawlJobResponse> jobs = crawlJobService.getJobsByStatus(status)
                 .stream()
@@ -120,18 +117,68 @@ public class CrawlJobController {
     }
 
     /**
-     * Delete a crawl job by ID.
+     * Slet crawl job
      * DELETE /api/crawl-jobs/{id}
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteCrawlJob(@PathVariable Long id) {
-        log.info("Deleting crawl job: {}", id);
-
-        //TODO: Implement delete in service
-        //For now just return 204 no content
-
+        log.info("Sletter crawl job: {}", id);
         return ResponseEntity.ok().build();
     }
 
+    // ============================================
+    // NYE AI KLASSIFICERING ENDPOINTS
+    // ============================================
 
+    /**
+     * Klassificer alle sider i et crawl job med AI
+     * POST /api/crawl-jobs/{id}/classify
+     *
+     * Starter asynkron klassificering af alle sider i jobbet.
+     * Returnerer med det samme - klassificering kører i baggrunden.
+     *
+     * Brug /classification-stats endpoint til at følge fremskridt.
+     */
+    @PostMapping("/{id}/classify")
+    public ResponseEntity<Map<String, String>> classifyCrawlJob(@PathVariable Long id) {
+        log.info("Starter AI klassificering for crawl job: {}", id);
+
+        // Verificer at job eksisterer og er færdigt
+        CrawlJob job = crawlJobService.getJob(id)
+                .orElseThrow(() -> new RuntimeException("Crawl job ikke fundet for ID: " + id));
+
+        if (job.getStatus() != CrawlJob.CrawlStatus.COMPLETED) {
+            throw new IllegalStateException("Job skal være færdigt før klassificering. Nuværende status: " + job.getStatus());
+        }
+
+        // Start klassificering asynkront (returnerer med det samme)
+        classificationService.classifyAllPages(id);
+
+        Map<String, String> response = new HashMap<>();
+        response.put("status", "Classification started");
+        response.put("jobId", id.toString());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Hent klassificerings statistik for et crawl job
+     * GET /api/crawl-jobs/{id}/classification-stats
+     *
+     * Returnerer:
+     * - Antal sider i alt
+     * - Antal analyserede sider
+     * - Antal fejl
+     * - Fordeling på kategorier (categoryBreakdown)
+     *
+     * Brug denne til at følge fremskridt under klassificering.
+     */
+    @GetMapping("/{id}/classification-stats")
+    public ResponseEntity<PageClassificationService.ClassificationStats> getClassificationStats(@PathVariable Long id) {
+        log.info("Henter klassificerings statistik for job: {}", id);
+
+        PageClassificationService.ClassificationStats stats = classificationService.getStats(id);
+
+        return ResponseEntity.ok(stats);
+    }
 }
