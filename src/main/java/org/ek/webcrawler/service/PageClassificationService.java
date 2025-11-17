@@ -12,7 +12,6 @@ import java.util.List;
 
 /**
  * Service til at klassificere crawlede sider med AI
- * Kører asynkront for ikke at blokere API'et
  */
 @Service
 @RequiredArgsConstructor
@@ -22,80 +21,59 @@ public class PageClassificationService {
     private final GroqService groqService;
     private final CrawledPageRepository pageRepository;
 
-    // ✅ FORBEDRET: Mere præcis system prompt med eksempler
+    // Meget kortere prompt (reducerer tokens med ~70%)
     private static final String SYSTEM_PROMPT = """
-            Du er en ekspert i at klassificere websider baseret på deres indhold og URL.
+            Klassificer websiden i ÉN kategori baseret primært på URL-mønsteret:
             
-            Klassificer websiden i ÉN af følgende kategorier:
+            PRODUCT - Specifikt produkt til salg
+            URL: /p/, /product/, /item/, -sku, -id i URL
+            Ex: /p/nike-air-max, /product/iphone-15
             
-            - PRODUCT: En side der præsenterer ET specifikt produkt til salg
-              Eksempler: "iPhone 15 Pro", "Nike Air Max", "Coloplast SenSura Mio"
-              Kendetegn: Pris, køb-knap, produktbilleder, produkt-specs
-              URL mønstre: /product/, /p/, /item/, SKU/produkt-ID i URL
+            CATEGORY - Liste af produkter
+            URL: /f/produkter/, /category/, /shop/, /collection/
+            Ex: /f/produkter/shoes, /shop/electronics
             
-            - CATEGORY: En liste/oversigt der viser FLERE produkter eller produktkategorier
-              Eksempler: "Se alle smartphones", "Hudpleje produkter", "Mænd > Sko > Sneakers"
-              Kendetegn: Grid/liste med produkter, filtre, sorteringsmuligheder
-              URL mønstre: /category/, /collection/, /shop/, /products/
-              VIGTIGT: Kun hvis siden primært lister produkter!
+            INFORMATION - Guides, ekspertise, læring, vores
+            URL: /vores-ekspertise/, /expertise/, /guide/, /learn/, /about/, /info/
+            Også: sygdomme/tilstande (/psoriasis/, /eksem/, /akne/)
+            Ex: /vores-ekspertise/psoriasis, /guide/skincare, /hvad-er-akne
             
-            - INFORMATION: Informationssider med guidende eller uddannende indhold
-              Eksempler: "Hvad er akne?", "Hvordan virker stomi?", "Guide til hudpleje"
-              Kendetegn: Artikellignende indhold, forklarende tekst, guides, FAQ
-              URL mønstre: /info/, /guide/, /learn/, /about/, /help/, /faq/
-              VIGTIGT: Omfatter også sider om sygdomme, tilstande, behandlinger
+            BLOG - Artikler med dato
+            URL: /blog/, /news/, /article/, dato i URL
             
-            - BLOG: Blog indlæg, nyheder eller artikler med dato
-              Eksempler: "5 tips til bedre hud", "Nye produkter i 2024"
-              Kendetegn: Publiceringsdato, forfatter, nyhedsformat
-              URL mønstre: /blog/, /news/, /article/, dato i URL
+            CONTACT - Kontakt/support
+            URL: /contact/, /kontakt/, /support/
             
-            - CONTACT: Kontakt, support eller kundeservice
-              Eksempler: "Kontakt os", "Kundeservice", "Find forhandler"
-              Kendetegn: Kontaktformular, telefonnumre, email, chat
-              URL mønstre: /contact/, /support/, /help/, /customer-service/
+            JOB - Karriere
+            URL: /jobs/, /career/, /karriere/
             
-            - JOB: Job, karriere eller rekruttering
-              Eksempler: "Ledige stillinger", "Bliv en del af teamet", "Vi søger"
-              URL mønstre: /jobs/, /careers/, /career/, /join-us/
+            LEGAL - Juridisk
+            URL: /privacy/, /terms/, /cookies/, /legal/
             
-            - LEGAL: Juridiske dokumenter
-              Eksempler: "Privatlivspolitik", "Cookies", "Handelsbetingelser"
-              URL mønstre: /privacy/, /terms/, /legal/, /cookies/
+            HOME - Forside (kun depth=0)
             
-            - HOME: Forside eller hovedlandingsside (kun hvis depth = 0)
-              Kendetegn: Velkomst, hero-banner, oversigt over sektioner
+            UNKNOWN - Kun hvis URL ikke matcher
             
-            - UNKNOWN: Kun hvis du virkelig ikke kan bestemme kategorien
+            Beslutning: 1) Tjek URL først, 2) Brug titel, 3) Brug indhold
+            Undgå UNKNOWN - matcher URL altid et mønster!
             
-            VIGTIGE REGLER:
-            1. En side om "hvad er X sygdom/tilstand" er INFORMATION, IKKE CATEGORY
-            2. En side der forklarer/uddanner er INFORMATION
-            3. En side der lister/viser produkter til køb er CATEGORY
-            4. CATEGORY skal have FLERE produkter, ikke bare info om ét emne
-            5. Hvis i tvivl mellem INFORMATION og CATEGORY: Vælg INFORMATION hvis siden primært forklarer/uddanner
-            
-            Svar KUN med kategorinavnet (f.eks. "INFORMATION") - ingen forklaring.
+            Svar KUN med kategorinavn (ex: "INFORMATION")
             """;
 
     /**
-     * Klassificer alle sider i et crawl job asynkront
-     * Kaldes fra CrawlJobController
-     *
-     * @param jobId ID på crawl jobbet
+     * Klassificer alle sider
+     * Øget delay for at undgå rate limit
      */
     @Async
     public void classifyAllPages(Long jobId) {
         log.info("Starter klassificering for job {}", jobId);
 
-        // Hent kun succesfulde sider (ignorer fejlede crawls)
         List<CrawledPage> pages = pageRepository.findByCrawlJobIdAndIsSuccessfulTrue(jobId);
         log.info("Fandt {} succesfulde sider at klassificere", pages.size());
 
         int classified = 0;
         int failed = 0;
 
-        // Klassificer hver side
         for (CrawledPage page : pages) {
             try {
                 String category = classifyPage(page);
@@ -104,13 +82,25 @@ public class PageClassificationService {
                 log.debug("Klassificerede side {}: {} -> {}", page.getId(), page.getUrl(), category);
             } catch (Exception e) {
                 log.error("Kunne ikke klassificere side {}: {}", page.getId(), e.getMessage());
+
+                // Hvis rate limit, vent længere
+                if (e.getMessage().contains("rate_limit") || e.getMessage().contains("429")) {
+                    log.warn("Rate limit ramt - venter 2 sekunder...");
+                    try {
+                        Thread.sleep(2000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+
                 updatePageCategory(page.getId(), "UNKNOWN", e.getMessage());
                 failed++;
             }
 
-            // Lille delay for at undgå rate limiting
+            // Øget delay fra 100ms til 500ms for at undgå rate limit
             try {
-                Thread.sleep(100);
+                Thread.sleep(500);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
@@ -121,16 +111,12 @@ public class PageClassificationService {
     }
 
     /**
-     * Klassificer en enkelt side ved at kalde Groq API
-     *
-     * @param page Siden der skal klassificeres
-     * @return Kategori navn (PRODUCT, INFORMATION, etc.)
+     * Klassificer en enkelt side
      */
     public String classifyPage(CrawledPage page) throws Exception {
         String userPrompt = buildPrompt(page);
         String response = groqService.getChatCompletion(SYSTEM_PROMPT, userPrompt);
 
-        // Valider at svaret er en gyldig kategori
         String category = response.toUpperCase().trim();
         if (!isValidCategory(category)) {
             log.warn("Ugyldig kategori returneret: {}. Bruger UNKNOWN", response);
@@ -141,43 +127,39 @@ public class PageClassificationService {
     }
 
     /**
-     * Byg prompt til AI'en baseret på side data
-     * Inkluderer URL, titel, hierarki niveau OG tekstindhold
+     * Byg prompt
+     * Reduceret tekstindhold fra 1500 til 500 karakterer
      */
     private String buildPrompt(CrawledPage page) {
         StringBuilder prompt = new StringBuilder();
+
+        // URL
         prompt.append("URL: ").append(page.getUrl()).append("\n");
 
+        // Titel
         if (page.getTitle() != null && !page.getTitle().isEmpty()) {
             prompt.append("Titel: ").append(page.getTitle()).append("\n");
         }
 
-        // Tilføj hierarki kontekst (hjælper med at identificere forside)
-        prompt.append("Dybde: ").append(page.getHierarchyLevel()).append("\n");
-
+        // Depth
+        prompt.append("Depth: ").append(page.getHierarchyLevel());
         if (page.getHierarchyLevel() == 0) {
-            prompt.append("(Dette er forsiden)\n");
+            prompt.append(" (forside)");
         }
+        prompt.append("\n");
 
-        // KRITISK: Tilføj tekstindhold hvis tilgængeligt
+        // Reduceret tekstindhold fra 1500 til 500 karakterer
         if (page.getTextContent() != null && !page.getTextContent().isEmpty()) {
-            // Begræns til første 1000 karakterer for at spare tokens
             String content = page.getTextContent();
-            if (content.length() > 1000) {
-                content = content.substring(0, 1000) + "...";
+            if (content.length() > 500) {
+                content = content.substring(0, 500) + "...";
             }
-            prompt.append("\nIndhold:\n").append(content).append("\n");
-        } else {
-            log.warn("Ingen tekstindhold for side {}, klassificering bliver mindre præcis", page.getId());
+            prompt.append("Indhold: ").append(content).append("\n");
         }
 
         return prompt.toString();
     }
 
-    /**
-     * Opdater kategori i databasen
-     * Gemmer også evt. fejl og markerer som analyseret
-     */
     @Transactional
     protected void updatePageCategory(Long pageId, String category, String error) {
         CrawledPage page = pageRepository.findById(pageId)
@@ -190,21 +172,11 @@ public class PageClassificationService {
         pageRepository.save(page);
     }
 
-    /**
-     * Check om kategori er gyldig
-     */
     private boolean isValidCategory(String category) {
         return List.of("PRODUCT", "CATEGORY", "INFORMATION", "BLOG", "CONTACT",
                 "JOB", "LEGAL", "HOME", "UNKNOWN").contains(category);
     }
 
-    /**
-     * Hent klassificerings statistik for et job
-     * Bruges til at vise fremskridt og fordeling
-     *
-     * @param jobId ID på crawl jobbet
-     * @return Statistik objekt med total, analyserede og kategori fordeling
-     */
     public ClassificationStats getStats(Long jobId) {
         List<CrawledPage> pages = pageRepository.findByCrawlJobId(jobId);
 
@@ -212,7 +184,6 @@ public class PageClassificationService {
         long analyzed = pages.stream().filter(p -> p.getAiAnalyzed() != null && p.getAiAnalyzed()).count();
         long errors = pages.stream().filter(p -> p.getAiAnalysisError() != null).count();
 
-        // Tæl antal sider per kategori
         java.util.Map<String, Long> categoryCount = pages.stream()
                 .filter(p -> p.getCategory() != null)
                 .collect(java.util.stream.Collectors.groupingBy(
@@ -228,15 +199,12 @@ public class PageClassificationService {
                 .build();
     }
 
-    /**
-     * DTO til statistik response
-     */
     @lombok.Data
     @lombok.Builder
     public static class ClassificationStats {
-        private long totalPages;        // Total antal sider i jobbet
-        private long analyzedPages;     // Antal analyserede sider
-        private long errors;            // Antal fejl under klassificering
-        private java.util.Map<String, Long> categoryBreakdown;  // Antal per kategori
+        private long totalPages;
+        private long analyzedPages;
+        private long errors;
+        private java.util.Map<String, Long> categoryBreakdown;
     }
 }

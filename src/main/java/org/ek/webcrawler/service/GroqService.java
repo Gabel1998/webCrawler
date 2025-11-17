@@ -68,8 +68,8 @@ public class GroqService {
                                 .content(userPrompt)
                                 .build()
                 ))
-                .temperature(0.1) // Lav temperature for konsistent klassificering
-                .maxTokens(100)
+                .temperature(0.0) // OPTIMIZED: 0.0 = mere deterministisk, kortere output
+                .maxTokens(50)    // OPTIMIZED: Reduceret fra 100 til 50 (kun kategori-navn)
                 .build();
 
         String requestBody = objectMapper.writeValueAsString(request);
@@ -129,7 +129,7 @@ public class GroqService {
     }
 
     /**
-     *  alle felter som Groq API returnerer
+     * Tilføjet alle felter som Groq API returnerer
      * Inkluderer @JsonIgnoreProperties for at ignorere ukendte felter
      */
     @Data
@@ -171,7 +171,7 @@ public class GroqService {
         @JsonProperty("total_tokens")
         private Integer totalTokens;
 
-        // Timing information
+        //  Timing information
         @JsonProperty("queue_time")
         private Double queueTime;
         @JsonProperty("prompt_time")
