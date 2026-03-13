@@ -11,15 +11,18 @@ import org.jsoup.select.Elements;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.remote.RemoteWebDriver;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.NoSuchElementException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.net.URL;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,6 +42,9 @@ public class SeleniumCrawlerService {
     private final CrawlJobService crawlJobService;
     private final PageService pageService;
     private WebDriver driver;
+
+    @Value("${selenium.remote.url:}")
+    private String seleniumRemoteUrl;
 
     @Async
     public void startCrawling(Long jobId) {
@@ -70,7 +76,7 @@ public class SeleniumCrawlerService {
         }
     }
 
-    private void initializeDriver() {
+    private void initializeDriver() throws Exception {
         log.info("Initializing Chrome WebDriver with Selenium Manager...");
 
         ChromeOptions options = new ChromeOptions();
@@ -88,7 +94,12 @@ public class SeleniumCrawlerService {
         options.addArguments("--disable-notifications");
         options.addArguments("--disable-popup-blocking");
 
-        driver = new ChromeDriver(options);
+        if (seleniumRemoteUrl != null && !seleniumRemoteUrl.isEmpty()) {
+            log.info("Connecting to remote Selenium at: {}", seleniumRemoteUrl);
+            driver = new RemoteWebDriver(new URL(seleniumRemoteUrl), options);
+        } else {
+            driver = new ChromeDriver(options);
+        }
         driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(30));
         driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(3));
 
